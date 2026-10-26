@@ -1,0 +1,43 @@
+[package]
+name = "loose-canon"
+version = "0.1.0"
+description = "Local-first real-estate discovery for the Goiânia metropolitan area"
+edition = "2024"
+rust-version = "1.90" # Tauri 2.12 MSRV
+license = "MIT"
+publish = false
+
+[lib]
+name = "loose_canon_lib"
+
+# --- Phase 1 dependencies ----------------------------------------------------
+# Deferred on purpose (each is introduced in the phase that first needs it):
+#   Phase 2: tokio, reqwest, scraper, url      (source adapters, HTTP, HTML)
+#            image + a pHash implementation    (perceptual hashing)
+#   Phase 3: reqwest (Gemini REST), keyring    (optional AI, Windows credential store)
+#   Phase 4: ort (optional ONNX vision model), model-download hashing
+# Tauri already ships its own async runtime, so `tokio` is not needed yet.
+[dependencies]
+tauri = { version = "2.12.5", features = [] } # default features kept: includes common-controls-v6, needed for native dialogs on Windows
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+rusqlite = { version = "0.41.0", features = ["bundled"] }
+regex = "1.13.1"
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

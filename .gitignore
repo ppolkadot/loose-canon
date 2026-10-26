@@ -1,0 +1,19 @@
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Rust / Tauri (Cargo.lock IS committed: this is an application)
+src-tauri/target/
+src-tauri/gen/
+
+# Local databases and caches created while developing
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
