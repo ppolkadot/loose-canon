@@ -56,6 +56,18 @@ pub fn record_observation(
     // IMMEDIATE takes the write lock up front so the "latest" we compare against cannot change
     // between the check and the insert.
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let outcome = record_observation_in(&tx, listing_id, observation)?;
+    tx.commit()?;
+    Ok(outcome)
+}
+
+/// Same as [`record_observation`] but inside a transaction the **caller** owns, so a listing
+/// update and its price observation can commit (or roll back) together.
+pub fn record_observation_in(
+    tx: &Connection,
+    listing_id: i64,
+    observation: &PriceObservation,
+) -> Result<RecordOutcome> {
     let observed_at = format_timestamp(observation.observed_at);
 
     let latest: Option<(i64, i64, String, String)> = tx
@@ -97,9 +109,9 @@ pub fn record_observation(
             serde_json::to_string(&observation.provenance)?,
         ],
     )?;
-    let id = tx.last_insert_rowid();
-    tx.commit()?;
-    Ok(RecordOutcome::Recorded { id })
+    Ok(RecordOutcome::Recorded {
+        id: tx.last_insert_rowid(),
+    })
 }
 
 /// Observations of a listing, oldest first.

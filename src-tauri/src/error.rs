@@ -18,6 +18,8 @@ pub enum ModelError {
     InvalidArea { centi_m2: u64, max_m2: u32 },
     #[error("unknown {kind} value {value:?}")]
     UnknownVariant { kind: &'static str, value: String },
+    #[error("invalid source outcome: {0}")]
+    InvalidOutcome(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -62,6 +64,9 @@ pub enum Error {
     MigrationStateInconsistent { details: String },
     #[error("SQLite foreign-key enforcement could not be enabled on this connection")]
     ForeignKeysUnavailable,
+    /// A configuration file (region seed, source configuration...) failed validation.
+    #[error("invalid {what}: {detail}")]
+    InvalidConfig { what: &'static str, detail: String },
     #[error("unexpected value {value:?} stored in column {column}")]
     InvalidStoredValue { column: &'static str, value: String },
     #[error(
@@ -70,6 +75,17 @@ pub enum Error {
     OutOfOrderObservation { observed_at: String, latest: String },
     #[error("the database lock was poisoned by a panic in another thread")]
     LockPoisoned,
+    /// A collection was requested but no source adapter is registered. Reported as such, never as
+    /// "searched and found nothing".
+    #[error("no sources are configured, so there is nothing to collect from")]
+    NoSourcesConfigured,
+    /// A collection is already running; only one runs at a time.
+    #[error("a collection is already running")]
+    CollectionAlreadyRunning,
+    /// A match decision was refused because the stored state does not allow it (the match does
+    /// not exist, a merge is still live, the property pointers no longer agree with the record).
+    #[error("match operation refused: {0}")]
+    MatchRefused(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -88,9 +104,13 @@ impl Error {
             Self::Migration { .. } => "migration",
             Self::MigrationStateInconsistent { .. } => "migration_state_inconsistent",
             Self::ForeignKeysUnavailable => "foreign_keys_unavailable",
+            Self::InvalidConfig { .. } => "invalid_config",
             Self::InvalidStoredValue { .. } => "invalid_stored_value",
             Self::OutOfOrderObservation { .. } => "out_of_order_observation",
             Self::LockPoisoned => "lock_poisoned",
+            Self::NoSourcesConfigured => "no_sources_configured",
+            Self::CollectionAlreadyRunning => "collection_already_running",
+            Self::MatchRefused(_) => "match_refused",
         }
     }
 }

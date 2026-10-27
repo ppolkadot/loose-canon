@@ -120,11 +120,17 @@ fn fresh_database_is_migrated_to_latest_with_foreign_keys_enforced() {
     assert_eq!(db.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
     assert!(db.foreign_keys_enabled().unwrap());
     db.with_conn(|c| {
-        assert_eq!(count(c, "schema_migrations"), 1);
+        assert_eq!(
+            count(c, "schema_migrations"),
+            i64::try_from(MIGRATIONS.len()).unwrap(),
+            "one audit row per migration"
+        );
         let (version, name): (u32, String) = c
-            .query_row("SELECT version, name FROM schema_migrations", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT version, name FROM schema_migrations ORDER BY version LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!((version, name.as_str()), (1, "initial_schema"));
         Ok(())
@@ -191,7 +197,7 @@ fn reopening_a_file_database_keeps_data_and_does_not_reapply_the_schema() {
             );
             assert_eq!(
                 count(c, "schema_migrations"),
-                1,
+                i64::try_from(MIGRATIONS.len()).unwrap(),
                 "schema must not be re-applied"
             );
             Ok(())
@@ -222,7 +228,10 @@ fn migrating_twice_on_one_connection_is_a_no_op() {
     db.with_conn(|c| {
         migrate(c)?;
         migrate(c)?;
-        assert_eq!(count(c, "schema_migrations"), 1);
+        assert_eq!(
+            count(c, "schema_migrations"),
+            i64::try_from(MIGRATIONS.len()).unwrap()
+        );
         Ok(())
     })
     .unwrap();

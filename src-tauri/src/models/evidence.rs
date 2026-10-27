@@ -14,6 +14,11 @@ pub struct Evidence {
     pub span: TextSpan,
     /// Exact slice of the original text covered by `span`.
     pub snippet: String,
+    /// Source field the text came from (`description`, `price`...) when the caller named one.
+    /// `span` indexes into **that field's** text. `None` for plain single-text parsing, and for
+    /// data stored before fields existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
 }
 
 impl Evidence {
@@ -27,7 +32,14 @@ impl Evidence {
         Self {
             snippet: original[span.start..span.end].to_owned(),
             span,
+            field: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_field(mut self, field: Option<String>) -> Self {
+        self.field = field;
+        self
     }
 }
 
@@ -51,6 +63,9 @@ string_enum! {
         CountImpliedBySingular => "count_implied_by_singular",
         /// The area is described generically (`área`, `área total`) so its kind is unknown.
         UnspecifiedAreaKind => "unspecified_area_kind",
+        /// The amount carries no label of its own; it was taken as the asking price only because
+        /// it sits in the source's structured price field.
+        PriceFromStructuredField => "price_from_structured_field",
     }
 }
 
@@ -120,5 +135,33 @@ mod tests {
         let ev = Evidence::from_span(text, span);
         assert_eq!(ev.snippet, "ágio");
         assert_eq!(ev.span, span);
+        assert_eq!(ev.field, None);
+    }
+
+    #[test]
+    fn field_is_optional_in_json_so_older_stored_evidence_still_loads() {
+        let old: Evidence =
+            serde_json::from_str(r#"{"span":{"start":0,"end":4},"snippet":"ágio"}"#).unwrap();
+        assert_eq!(old.field, None);
+
+        let ev = Evidence::from_span(
+            "ágio",
+            TextSpan {
+                start: 0,
+                end: "ágio".len(),
+            },
+        )
+        .with_field(Some("price".into()));
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""field":"price""#));
+        assert_eq!(serde_json::from_str::<Evidence>(&json).unwrap(), ev);
+
+        let plain =
+            serde_json::to_string(&Evidence::from_span("ágio", TextSpan { start: 0, end: 5 }))
+                .unwrap();
+        assert!(
+            !plain.contains("field"),
+            "an absent field must not be serialised: {plain}"
+        );
     }
 }

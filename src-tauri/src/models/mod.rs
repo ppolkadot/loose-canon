@@ -56,8 +56,12 @@ macro_rules! string_enum {
 
 pub mod area;
 pub mod characteristics;
+pub mod collection;
 pub mod confidence;
 pub mod evidence;
+pub mod image;
 pub mod listing;
+pub mod matching;
 pub mod money;
 pub mod price;
+pub mod region;

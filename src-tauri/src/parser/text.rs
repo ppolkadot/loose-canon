@@ -13,6 +13,15 @@ pub struct FoldedText<'a> {
     folded: String,
     /// For every byte of `folded`: `[start, end)` of the original char it came from.
     spans: Vec<(usize, usize)>,
+    /// Source-field name stamped on every [`Evidence`] this text produces.
+    field: Option<String>,
+}
+
+/// The folded form of `text` (lowercase, accent-free, one-to-one), for comparing names and
+/// matching free text. Use [`FoldedText`] instead when evidence offsets are needed.
+#[must_use]
+pub fn fold_text(text: &str) -> String {
+    FoldedText::new(text).as_str().to_owned()
 }
 
 const fn is_combining_mark(c: char) -> bool {
@@ -71,7 +80,15 @@ impl<'a> FoldedText<'a> {
             original,
             folded,
             spans,
+            field: None,
         }
+    }
+
+    /// Names the source field this text came from; evidence will carry it.
+    #[must_use]
+    pub fn with_field(mut self, field: &str) -> Self {
+        self.field = Some(field.to_owned());
+        self
     }
 
     #[must_use]
@@ -97,7 +114,7 @@ impl<'a> FoldedText<'a> {
 
     #[must_use]
     pub fn evidence(&self, range: Range<usize>) -> Evidence {
-        Evidence::from_span(self.original, self.span(range))
+        Evidence::from_span(self.original, self.span(range)).with_field(self.field.clone())
     }
 }
 

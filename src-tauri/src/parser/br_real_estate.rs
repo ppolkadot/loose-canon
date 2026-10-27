@@ -45,7 +45,7 @@ use crate::models::{
 };
 
 /// Identifies this extractor and its behaviour version in stored provenance.
-pub const PARSER_VERSION: &str = "br_real_estate/1";
+pub const PARSER_VERSION: &str = "br_real_estate/2";
 
 /// How far left of a candidate a label may sit.
 const PRICE_LEFT_WINDOW: usize = 48;
@@ -68,10 +68,61 @@ macro_rules! regex {
     }};
 }
 
+/// Text together with the name of the source field it came from (`description`, `price`...).
+/// The name is stamped on every [`Evidence`](crate::models::evidence::Evidence) so a span can be
+/// resolved against the right text.
+#[derive(Debug, Clone, Copy)]
+pub struct StructuredText<'a> {
+    pub field: &'a str,
+    pub text: &'a str,
+}
+
+/// A source adapter's statement that `field` is the platform's **structured asking-price field**.
+///
+/// `confidence` is the confidence that an unlabelled amount in *this source's* price field really
+/// is the full asking price. It is a per-source calibration result: until a source has been
+/// measured against labelled real listings, adapters must pass [`Confidence::Low`], which keeps
+/// the price out of every comparison and out of the full-price-only filter.
+#[derive(Debug, Clone, Copy)]
+pub struct PriceFieldHint<'a> {
+    pub field: StructuredText<'a>,
+    pub confidence: Confidence,
+}
+
 /// Parses one advertisement text (callers may join title and description with a newline).
 #[must_use]
 pub fn parse_listing_text(text: &str) -> ExtractedFacts {
-    let folded = FoldedText::new(text);
+    parse_text(text, None)
+}
+
+/// Like [`parse_listing_text`], with every piece of evidence attributed to `text.field`.
+#[must_use]
+pub fn parse_structured_text(text: StructuredText<'_>) -> ExtractedFacts {
+    parse_text(text.text, Some(text.field))
+}
+
+/// Parses a description together with the source's structured price field.
+///
+/// The description is parsed exactly as [`parse_listing_text`] would, with its evidence attributed
+/// to `description.field`. Prices read from the price field (see [`PriceFieldHint`]) are placed
+/// **before** the description's, their evidence attributed to the hint's field. Characteristics
+/// come from the description only.
+#[must_use]
+pub fn parse_listing_with_price_hint(
+    description: StructuredText<'_>,
+    hint: &PriceFieldHint<'_>,
+) -> ExtractedFacts {
+    let mut facts = parse_text(description.text, Some(description.field));
+    let headline = headline_price_mentions(hint, &facts.prices);
+    facts.prices.splice(0..0, headline);
+    facts
+}
+
+fn parse_text(text: &str, field: Option<&str>) -> ExtractedFacts {
+    let folded = field.map_or_else(
+        || FoldedText::new(text),
+        |field| FoldedText::new(text).with_field(field),
+    );
     let mut discarded = Vec::new();
     let mut prices = extract_prices(&folded, &mut discarded);
     promote_unlabelled_amounts(&mut prices);
@@ -479,6 +530,9 @@ fn warning_for(kind: WarningKind) -> ParseWarning {
         WarningKind::UnspecifiedAreaKind => {
             "O anúncio não informa se a área é de lote, construída ou útil."
         }
+        WarningKind::PriceFromStructuredField => {
+            "Valor sem rótulo, tomado como preço de venda apenas por estar no campo de preço da fonte."
+        }
     };
     ParseWarning::new(kind, message)
 }
@@ -593,28 +647,15 @@ fn extract_prices(
 fn promote_unlabelled_amounts(mentions: &mut [PriceMention]) {
     let largest_component = mentions
         .iter()
-        .filter(|m| {
-            matches!(
-                m.price.classification(),
-                PriceClassification::Agio
-                    | PriceClassification::DownPayment
-                    | PriceClassification::MonthlyPayment
-                    | PriceClassification::OutstandingBalance
-            ) && m.confidence >= Confidence::Medium
-        })
+        .filter(|m| is_financing_component(m) && m.confidence >= Confidence::Medium)
         .map(|m| m.price.money())
         .max();
     let Some(largest_component) = largest_component else {
         return;
     };
     for mention in mentions {
-        let unlabelled = mention.price.classification() == PriceClassification::Unknown
-            && mention
-                .warnings
-                .iter()
-                .any(|w| w.kind == WarningKind::UnlabelledAmount);
         let amount = mention.price.money();
-        if unlabelled
+        if is_unlabelled(mention)
             && amount > largest_component
             && amount.centavos() >= MIN_PROMOTABLE_FULL_PRICE_CENTAVOS
         {
@@ -623,6 +664,67 @@ fn promote_unlabelled_amounts(mentions: &mut [PriceMention]) {
             mention.warnings = vec![warning_for(WarningKind::AssumedFullPrice)];
         }
     }
+}
+
+/// An amount that is part of a financing arrangement rather than the price itself.
+fn is_financing_component(mention: &PriceMention) -> bool {
+    matches!(
+        mention.price.classification(),
+        PriceClassification::Agio
+            | PriceClassification::DownPayment
+            | PriceClassification::MonthlyPayment
+            | PriceClassification::OutstandingBalance
+    )
+}
+
+/// An amount with no label at all (as opposed to one labelled as something else, or conflicting).
+fn is_unlabelled(mention: &PriceMention) -> bool {
+    mention.price.classification() == PriceClassification::Unknown
+        && mention
+            .warnings
+            .iter()
+            .any(|w| w.kind == WarningKind::UnlabelledAmount)
+}
+
+/// Prices read from the source's structured price field, ready to go in front of the
+/// description's own mentions.
+///
+/// The hint only ever applies to a field holding **exactly one** amount that carries no label of
+/// its own. An explicit label in the field (`ágio`, `/mês`, `valor total`...) is stronger evidence
+/// and is left exactly as parsed. A lone unlabelled amount is taken as the asking price at the
+/// source's calibrated `confidence`, unless that would be implausible or contradicted:
+///
+/// * below R$ 10.000 (rent, a fee, a hostile one-real "price"): not promoted;
+/// * not larger than an ágio / down payment / instalment / balance the description labels
+///   (a full price cannot be smaller than a part of itself, and an ágio listing often puts the
+///   ágio in the headline field): not promoted, marked `conflicting_labels`.
+fn headline_price_mentions(
+    hint: &PriceFieldHint<'_>,
+    description_prices: &[PriceMention],
+) -> Vec<PriceMention> {
+    let folded = FoldedText::new(hint.field.text).with_field(hint.field.field);
+    // Numbers the parser sets aside in a price field are not worth carrying around.
+    let mut ignored = Vec::new();
+    let mut mentions = extract_prices(&folded, &mut ignored);
+
+    let [only] = mentions.as_mut_slice() else {
+        return mentions;
+    };
+    let amount = only.price.money();
+    if !is_unlabelled(only) || amount.centavos() < MIN_PROMOTABLE_FULL_PRICE_CENTAVOS {
+        return mentions;
+    }
+    let contradicted = description_prices
+        .iter()
+        .any(|m| is_financing_component(m) && m.price.money() >= amount);
+    if contradicted {
+        only.warnings = vec![warning_for(WarningKind::ConflictingLabels)];
+    } else {
+        only.price = ClassifiedPrice::new(PriceClassification::FullPrice, amount);
+        only.confidence = hint.confidence;
+        only.warnings = vec![warning_for(WarningKind::PriceFromStructuredField)];
+    }
+    mentions
 }
 
 // ================================================================================================
@@ -1209,5 +1311,7 @@ fn resolve_area_label(
     }
 }
 
+#[cfg(test)]
+mod hint_tests;
 #[cfg(test)]
 mod tests;

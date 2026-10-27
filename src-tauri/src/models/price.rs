@@ -233,6 +233,7 @@ mod tests {
             evidence: Evidence {
                 span: TextSpan { start: 0, end: 1 },
                 snippet: "x".into(),
+                field: None,
             },
             warnings: vec![],
         }

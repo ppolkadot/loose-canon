@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "regions": [
+    { "slug": "br-go", "state_code": "GO", "name": "Goiás", "region_type": "state" },
+
+    {
+      "slug": "br-go-goiania",
+      "state_code": "GO",
+      "municipality": "Goiânia",
+      "name": "Goiânia",
+      "region_type": "municipality",
+      "parent": "br-go"
+    },
+    {
+      "slug": "br-go-goiania-setor-bueno",
+      "state_code": "GO",
+      "municipality": "Goiânia",
+      "name": "Setor Bueno",
+      "region_type": "neighborhood",
+      "parent": "br-go-goiania",
+      "aliases": ["St. Bueno"]
+    },
+    {
+      "slug": "br-go-goiania-setor-marista",
+      "state_code": "GO",
+      "municipality": "Goiânia",
+      "name": "Setor Marista",
+      "region_type": "neighborhood",
+      "parent": "br-go-goiania",
+      "aliases": ["St. Marista"]
+    },
+    {
+      "slug": "br-go-goiania-jardim-goias",
+      "state_code": "GO",
+      "municipality": "Goiânia",
+      "name": "Jardim Goiás",
+      "region_type": "neighborhood",
+      "parent": "br-go-goiania",
+      "aliases": ["Jd. Goiás"]
+    },
+    {
+      "slug": "br-go-goiania-parque-amazonia",
+      "state_code": "GO",
+      "municipality": "Goiânia",
+      "name": "Parque Amazônia",
+      "region_type": "neighborhood",
+      "parent": "br-go-goiania",
+      "aliases": ["Pq. Amazônia"]
+    },
+
+    {
+      "slug": "br-go-aparecida-de-goiania",
+      "state_code": "GO",
+      "municipality": "Aparecida de Goiânia",
+      "name": "Aparecida de Goiânia",
+      "region_type": "municipality",
+      "parent": "br-go"
+    },
+    {
+      "slug": "br-go-aparecida-de-goiania-vila-brasilia",
+      "state_code": "GO",
+      "municipality": "Aparecida de Goiânia",
+      "name": "Vila Brasília",
+      "region_type": "neighborhood",
+      "parent": "br-go-aparecida-de-goiania"
+    },
+    {
+      "slug": "br-go-aparecida-de-goiania-garavelo",
+      "state_code": "GO",
+      "municipality": "Aparecida de Goiânia",
+      "name": "Garavelo",
+      "region_type": "neighborhood",
+      "parent": "br-go-aparecida-de-goiania"
+    },
+    {
+      "slug": "br-go-aparecida-de-goiania-cidade-livre",
+      "state_code": "GO",
+      "municipality": "Aparecida de Goiânia",
+      "name": "Cidade Livre",
+      "region_type": "neighborhood",
+      "parent": "br-go-aparecida-de-goiania"
+    },
+    {
+      "slug": "br-go-aparecida-de-goiania-buriti-sereno",
+      "state_code": "GO",
+      "municipality": "Aparecida de Goiânia",
+      "name": "Buriti Sereno",
+      "region_type": "neighborhood",
+      "parent": "br-go-aparecida-de-goiania"
+    },
+
+    {
+      "slug": "br-go-hidrolandia",
+      "state_code": "GO",
+      "municipality": "Hidrolândia",
+      "name": "Hidrolândia",
+      "region_type": "municipality",
+      "parent": "br-go",
+      "metadata": { "notes": "Gated communities, chácaras and weekend properties; the BR-153 corridor." }
+    },
+    {
+      "slug": "br-go-hidrolandia-corredor-br-153",
+      "state_code": "GO",
+      "municipality": "Hidrolândia",
+      "name": "Corredor BR-153 (Hidrolândia)",
+      "region_type": "corridor",
+      "parent": "br-go-hidrolandia",
+      "aliases": ["BR-153 Hidrolândia", "BR 153 Hidrolândia"]
+    }
+  ]
+}

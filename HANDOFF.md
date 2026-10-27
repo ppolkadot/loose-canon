@@ -1,5 +1,17 @@
 # Loose Canon — Session Handoff (end of Phase 1)
 
+> **SUPERSEDED IN PART (2026-10-27).** This file is an accurate record of the **end of Phase 1**
+> and remains the reference for the domain model, schema v1, the parser and the original
+> specification (Appendix B). It is **out of date** about Phase 2: Phase 2 has since been
+> implemented as far as is possible without a permitted source adapter, and is **incomplete**.
+> For the current state read, in order:
+> [`docs/phase-2-alignment-review.md`](docs/phase-2-alignment-review.md) (status, evidence,
+> decisions needed), [`docs/sources/README.md`](docs/sources/README.md) (why no adapter exists),
+> [`docs/matching.md`](docs/matching.md) (matching rule, merge/undo, evaluation).
+> Statements below that say Phase 2 is "not started", that the test count is 149, or that the
+> price-field hint is "not implemented" describe the Phase 1 snapshot; they are no longer true
+> (545 tests; the hint exists, defaulting to `Low` confidence).
+
 Snapshot date: **2026-10-26**. Model used in the session: **Claude Sonnet 5.5**.
 Audience: the next engineer or AI session that continues this project.
 Everything here is either (a) verified by a command run during the session (evidence is in
@@ -58,7 +70,7 @@ At the end of Phase 1 the assistant asked four questions. The user answered:
 | 1 | Should adapters be able to pass a hint so a source's structured "asking price" field counts as a full price at Medium confidence? (Without it, every unlabelled-price listing is hidden by "Ocultar Ágio".) | "You can add the hint" | **Approved.** Not implemented yet. Design proposal in section 17.2. It lives in the parser API (`parse_listing_text` has no hint parameter today). |
 | 2 | Is Medium confidence the right minimum for a price to count as comparable? | "Yes, low confidence (less than 60% of certain should not be classified as comparable)" | **Confirmed**: `MIN_COMPARABLE_CONFIDENCE = Confidence::Medium` stays (`src-tauri/src/models/price.rs`); `Low` is never comparable. The user additionally defines the numeric meaning: **anything below 60 % certainty is "Low" and must not be treated as comparable.** Consequence: the `Medium` band must really mean ≥ 60 % certain. The current Low/Medium/High assignments are *hand-set heuristics, not calibrated probabilities* — they must be calibrated on labelled real listings in Phase 2 (section 17.3). The 60 % floor is the user's number; the Medium/High boundary (proposed 85 %) is only a proposal. |
 | 3 | Which two sources should be evaluated first (62imoveis, OLX, ZAP Imóveis, or a local brokerage)? | "all of them" | Interpreted as: **evaluate all four candidate sources** (62imoveis, OLX, ZAP Imóveis, local brokerages). **Tension to confirm at Phase 2 kickoff:** the original specification says "Start with two permitted sources" and "Do not expand to many sources before the initial adapters prove reliable." Recommended reconciliation: do the access-rule/feasibility review for all four first, then implement adapters incrementally (first the two that pass review and are technically simplest) — unless the user explicitly says to implement all four at once. Instagram/Facebook remain out of scope as HTML sources (permitted APIs/providers only). |
-| 4 | Is the bundle identifier `br.com.a3consultoria.loosecanon` the right one? | "no, will be informed later" | The identifier in `src-tauri/tauri.conf.json` is a **placeholder** (derived from the company domain) and must be replaced when the user provides the real one. **Impact:** the identifier is also the name of the per-user app-data folder, so changing it moves where the SQLite file lives. Nothing is shipped yet, so it is safe to change now; do it before any packaging/distribution. Do not invent another value. |
+| 4 | Is the placeholder bundle identifier (derived from the company domain) the right one? | "no, will be informed later" | **Resolved 2026-10-27:** the user supplied `com.polariscompany.loosecanon`, which is now in `src-tauri/tauri.conf.json`. At the time of this snapshot the identifier was a **placeholder** that had to be replaced when the user provided the real one. **Impact:** the identifier is also the name of the per-user app-data folder, so changing it moves where the SQLite file lives. Nothing is shipped yet, so it is safe to change now; do it before any packaging/distribution. Do not invent another value. |
 
 ---
 
@@ -91,9 +103,9 @@ excluding git-ignored folders which are listed separately):
 **Conclusion: no file must be withheld.** Soft flags to be aware of before sharing publicly:
 
 1. `LICENSE` names the copyright holder by handle (this was already in the initial commit).
-2. `src-tauri/tauri.conf.json` → `identifier` contains the company name (`a3consultoria`). It is
-   a placeholder pending decision 4; replace it (or use a neutral placeholder) if the repo is
-   published before the real identifier is known.
+2. `src-tauri/tauri.conf.json` → `identifier` was a placeholder derived from the company domain at
+   the time of this snapshot (decision 4). It has since been replaced by the identifier the user
+   supplied (see decision 4).
 3. **Do not zip/share the ignored folders.** `src-tauri/target/` embeds absolute local paths and the
    Windows user name in debug info; `node_modules/` and `dist/` are just bulky build output.
 4. The smoke-test databases created under the Tauri app-data folder are **outside the repo** and
@@ -567,7 +579,7 @@ hostile/empty input (including a prompt-injection-looking string and `<script>` 
 
 ## 12. Tauri, frontend and configuration reference
 
-* `src-tauri/tauri.conf.json`: `productName` "Loose Canon", version 0.1.0, **`identifier` `br.com.a3consultoria.loosecanon` (PLACEHOLDER — decision 4)**,
+* `src-tauri/tauri.conf.json`: `productName` "Loose Canon", version 0.1.0, **`identifier` was a PLACEHOLDER at this snapshot (decision 4); it is now `com.polariscompany.loosecanon`**,
   `build`: `beforeDevCommand: npm run dev`, `devUrl: http://localhost:1420`, `beforeBuildCommand: npm run build`, `frontendDist: ../dist`;
   window 1100×760 (min 800×560); CSP `default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'`
   and a `devCsp` that additionally allows `ws://localhost:1420 http://localhost:1420`; **`bundle.active = false`** (packaging is Phase 4 and not validated);
@@ -667,7 +679,7 @@ seven `assert!(x.is_empty())` → `assert_eq!(x, [])` / `assert_ne!`, one unused
 * Bare digits without `R$`/`mil`/`k` need a label and ≥ 4 digits or a thousands separator (`parcelas de 500` is not read).
 * Hectares/alqueires are not converted; property type is not parsed; non-Portuguese text isn't interpreted; `3/4 quartos` is treated as ambiguous (range vs shorthand).
 * The "Ocultar Ágio" predicate and `headline_price` are not wired to any command/UI yet; `regions.json` seeding was not part of Phase 1 (table is ready).
-* Single DB connection behind a mutex; startup failure shows no dialog; icons are placeholders; **packaging not validated**; bundle identifier is a placeholder.
+* Single DB connection behind a mutex; startup failure shows no dialog; icons are placeholders; **packaging not validated**; bundle identifier was a placeholder at this snapshot (since replaced, see decision 4).
 * TypeScript 7 / Vite 8 are the newest majors — passing here, but little ecosystem mileage.
 * The warm-cache assumption: `dist/` must exist before compiling Rust (see section 12).
 * No measurements yet of startup time, memory, search latency, hashing time, DB growth (the spec wants these measured in later phases; only a ~37 MB working set at idle was observed once).

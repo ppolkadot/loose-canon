@@ -7,6 +7,10 @@ dist/
 src-tauri/target/
 src-tauri/gen/
 
+# Local secrets (the optional AI key must never be committed)
+.env
+.env.*
+
 # Local databases and caches created while developing
 *.sqlite3
 *.sqlite3-wal

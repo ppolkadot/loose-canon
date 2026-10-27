@@ -10,13 +10,19 @@ publish = false
 [lib]
 name = "loose_canon_lib"
 
-# --- Phase 1 dependencies ----------------------------------------------------
-# Deferred on purpose (each is introduced in the phase that first needs it):
-#   Phase 2: tokio, reqwest, scraper, url      (source adapters, HTTP, HTML)
-#            image + a pHash implementation    (perceptual hashing)
-#   Phase 3: reqwest (Gemini REST), keyring    (optional AI, Windows credential store)
+# --- Dependencies by phase ---------------------------------------------------
+# Each is introduced in the phase that first needs it.
+#   Phase 1: tauri, serde, serde_json, rusqlite, regex, chrono, thiserror
+#   Phase 2: tokio, reqwest, url   (bounded source fetcher and the background jobs)
+#            image                 (JPEG/PNG/WebP decoding only; the perceptual hash itself is
+#                                   implemented in `images/phash.rs` so it cannot change with a
+#                                   library upgrade)
+# Deliberately NOT added yet:
+#   Phase 2: scraper (HTML parsing): it arrives with the first real source adapter, which does
+#            not exist because no evaluated source currently permits automated collection (see
+#            docs/sources/). Nothing here parses HTML.
+#   Phase 3: Gemini REST client (reqwest is already present), keyring (Windows credential store)
 #   Phase 4: ort (optional ONNX vision model), model-download hashing
-# Tauri already ships its own async runtime, so `tokio` is not needed yet.
 [dependencies]
 tauri = { version = "2.12.5", features = [] } # default features kept: includes common-controls-v6, needed for native dialogs on Windows
 serde = { version = "1.0.229", features = ["derive"] }
@@ -25,9 +31,15 @@ rusqlite = { version = "0.41.0", features = ["bundled"] }
 regex = "1.13.1"
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
 thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["native-tls", "gzip", "charset", "system-proxy"] }
+url = "2.5.8"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+# Local HTTP test server (TcpListener) for the fetcher tests.
+tokio = { version = "1.54.1", features = ["net", "io-util"] }
 
 [build-dependencies]
 tauri-build = { version = "2.7.4", features = [] }

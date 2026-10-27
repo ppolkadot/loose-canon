@@ -20,7 +20,13 @@
 //! that has shipped. Migrations that rebuild a table must account for foreign keys being
 //! enforced (SQLite cannot toggle them inside a transaction).
 
+pub mod images;
+pub mod listings;
+pub mod matches;
 pub mod price_history;
+pub mod properties;
+pub mod regions;
+pub mod runs;
 
 use std::{
     path::{Path, PathBuf},
@@ -43,11 +49,18 @@ pub struct Migration {
 }
 
 /// Ordered, contiguous, starting at 1. Append only.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "initial_schema",
-    sql: include_str!("schema.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial_schema",
+        sql: include_str!("schema.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "collection_and_audit",
+        sql: include_str!("migrations/0002_collection_and_audit.sql"),
+    },
+];
 
 /// Schema version this build creates and understands.
 pub const LATEST_SCHEMA_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
@@ -213,5 +226,9 @@ impl Database {
     }
 }
 
+#[cfg(test)]
+mod migration_0002_tests;
+#[cfg(test)]
+pub(crate) mod testkit;
 #[cfg(test)]
 mod tests;
