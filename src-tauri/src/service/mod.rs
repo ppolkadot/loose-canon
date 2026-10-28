@@ -4,8 +4,11 @@
 //! * **startup** seeds the region catalogue (idempotent, never deletes) and marks runs that were
 //!   still `running` when the previous process died as failed;
 //! * **one collection at a time**: starting a second is refused, cancelling stops the running one;
-//! * a collection is followed by image processing and then a matching pass, so a finished run
-//!   leaves the library ready to review. Matching only proposes; nothing is ever merged here;
+//! * a collection is followed by image processing, a matching pass and a refresh of the local
+//!   scores, so a finished run leaves the library ready to review. Matching only proposes;
+//!   nothing is ever merged here;
+//! * a change that alters which listings form a property (a merge, an undo) refreshes the scores
+//!   in the same call; if only the refresh fails the change stands and the error says so;
 //! * with no registered source, starting a collection fails with `no_sources_configured` and
 //!   creates no run: that must never look like "searched and found nothing".
 
@@ -14,6 +17,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::sync::Semaphore;
 
@@ -22,6 +26,7 @@ use crate::{
         Database,
         regions::{DEFAULT_SEED_JSON, SeedReport, parse_seed, seed_regions},
         runs::{fail_interrupted_runs, latest_outcomes_by_source},
+        settings::{get_setting_or_default, set_setting},
     },
     error::{Error, Result},
     images::pipeline::{ImageReport, ImageSource, process_pending_images},
@@ -30,6 +35,11 @@ use crate::{
         run::{MatchRunReport, run_matching},
     },
     models::collection::{RunStatus, SourceOutcome},
+    ranking::{
+        self,
+        config::{RANKING_CONFIG_KEY, RankingConfig, SEARCH_PREFERENCES_KEY, SearchPreferences},
+        store::SaveReport,
+    },
     sources::{
         CancelToken, SearchRequest, SourceAdapter,
         pipeline::{Clock, CollectionDeps, ProgressSink, run_collection, with_db},
@@ -69,6 +79,8 @@ pub struct CollectionFinished {
     pub follow_up_errors: Vec<String>,
     pub images: Option<ImageReport>,
     pub matching: Option<MatchRunReport>,
+    /// The local scores refreshed after the matching pass.
+    pub ranking: Option<SaveReport>,
 }
 
 pub type FinishedSink = Box<dyn FnOnce(CollectionFinished) + Send>;
@@ -125,6 +137,76 @@ impl AppService {
                     "background task failed: {e}"
                 )))
             })?
+    }
+
+    /// Recomputes every local score now.
+    pub fn recompute_ranking(&self) -> Result<SaveReport> {
+        let now = (self.clock)();
+        self.db.with_conn(|conn| ranking::recompute(conn, now))
+    }
+
+    /// Runs a change to the library and then refreshes the scores in the same blocking call.
+    /// When only the refresh fails, the change stands and the error says so.
+    pub async fn blocking_then_rerank<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut rusqlite::Connection) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let clock = Arc::clone(&self.clock);
+        self.blocking(move |conn| {
+            let changed = f(conn)?;
+            ranking::recompute(conn, clock())
+                .map_err(|error| Error::RankingRefreshFailed(error.to_string()))?;
+            Ok(changed)
+        })
+        .await
+    }
+
+    /// The saved search preferences (empty when none were saved).
+    pub fn search_preferences(&self) -> Result<SearchPreferences> {
+        self.db
+            .with_conn(|conn| get_setting_or_default(conn, SEARCH_PREFERENCES_KEY))
+    }
+
+    /// The saved ranking configuration (the defaults when none was saved).
+    pub fn ranking_config(&self) -> Result<RankingConfig> {
+        self.db
+            .with_conn(|conn| get_setting_or_default(conn, RANKING_CONFIG_KEY))
+    }
+
+    /// Validates and saves the preferences, then refreshes the scores they affect.
+    pub async fn save_search_preferences(
+        &self,
+        preferences: SearchPreferences,
+    ) -> Result<SaveReport> {
+        preferences.validate()?;
+        let now = (self.clock)();
+        self.save_setting_then_rerank(SEARCH_PREFERENCES_KEY, preferences, now)
+            .await
+    }
+
+    /// Validates and saves the ranking configuration, then refreshes every score.
+    pub async fn save_ranking_config(&self, config: RankingConfig) -> Result<SaveReport> {
+        config.validate()?;
+        let now = (self.clock)();
+        self.save_setting_then_rerank(RANKING_CONFIG_KEY, config, now)
+            .await
+    }
+
+    /// Saves one settings document and refreshes the scores. The document stands even if only the
+    /// refresh fails (the error then says so).
+    async fn save_setting_then_rerank<T: Serialize + Send + 'static>(
+        &self,
+        key: &'static str,
+        document: T,
+        now: DateTime<Utc>,
+    ) -> Result<SaveReport> {
+        let clock = Arc::clone(&self.clock);
+        self.blocking(move |conn| {
+            set_setting(conn, key, &document, now)?;
+            ranking::recompute(conn, clock())
+                .map_err(|error| Error::RankingRefreshFailed(error.to_string()))
+        })
+        .await
     }
 
     /// One matching pass on demand (a collection already runs one when it finishes).
@@ -244,6 +326,7 @@ impl AppService {
                     follow_up_errors: Vec::new(),
                     images: None,
                     matching: None,
+                    ranking: None,
                 };
             }
         };
@@ -263,6 +346,11 @@ impl AppService {
             .await
             .map_err(|e| follow_up_errors.push(format!("matching failed: {e}")))
             .ok();
+        let clock = Arc::clone(&self.clock);
+        let ranking = with_db(&self.db, move |conn| ranking::recompute(conn, clock()))
+            .await
+            .map_err(|e| follow_up_errors.push(format!("ranking failed: {e}")))
+            .ok();
         CollectionFinished {
             run_id: Some(report.run_id),
             status: Some(report.status),
@@ -271,6 +359,7 @@ impl AppService {
             follow_up_errors,
             images,
             matching,
+            ranking,
         }
     }
 }

@@ -8,6 +8,7 @@
 pub mod collection;
 pub mod matches;
 pub mod properties;
+pub mod ranking;
 
 use std::sync::Arc;
 

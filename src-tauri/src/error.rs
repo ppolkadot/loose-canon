@@ -86,6 +86,17 @@ pub enum Error {
     /// not exist, a merge is still live, the property pointers no longer agree with the record).
     #[error("match operation refused: {0}")]
     MatchRefused(String),
+    /// A change was saved but the local scores could not be refreshed afterwards. The change
+    /// stands; the scores keep their previous values until the next successful refresh.
+    #[error("the change was saved, but the local scores could not be refreshed: {0}")]
+    RankingRefreshFailed(String),
+    /// The operating system's credential store refused or failed. The message never contains
+    /// the secret.
+    #[error("credential store error: {0}")]
+    SecretStore(String),
+    /// An AI prioritisation did not produce a result. The local ranking is unaffected.
+    #[error(transparent)]
+    Ai(#[from] crate::ai::failure::AiFailure),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -111,6 +122,9 @@ impl Error {
             Self::NoSourcesConfigured => "no_sources_configured",
             Self::CollectionAlreadyRunning => "collection_already_running",
             Self::MatchRefused(_) => "match_refused",
+            Self::RankingRefreshFailed(_) => "ranking_refresh_failed",
+            Self::SecretStore(_) => "secret_store",
+            Self::Ai(failure) => failure.kind(),
         }
     }
 }

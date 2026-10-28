@@ -214,10 +214,22 @@ export interface CollectionFinished {
   status: RunStatus | null;
   outcomes: SourceOutcome[];
   error: string | null;
-  /** Problems in the work after a successful collection (images, matching). */
+  /** Problems in the work after a successful collection (images, matching, ranking). */
   followUpErrors: string[];
   images: ImageReport | null;
   matching: MatchRunReport | null;
+  /** The local scores refreshed after matching. */
+  ranking: RankingReport | null;
+}
+
+/** What a refresh of the local scores did. */
+export interface RankingReport {
+  /** Properties saved with a score. */
+  scored: number;
+  /** Properties saved without one (nothing could be computed), with their explanation. */
+  unscored: number;
+  /** Properties that had a score but are no longer ranked. */
+  cleared: number;
 }
 
 export const COLLECTION_PROGRESS_EVENT = "collection-progress";
@@ -287,8 +299,12 @@ export function listRegions(onlyEnabled = true): Promise<RegionRow[]> {
   return invoke<RegionRow[]>("list_regions", { onlyEnabled });
 }
 
+export type PropertySort = "recent" | "score";
+
 /** Filters and paging of the saved-results list. `{}` is every visible property, first page. */
 export interface ListPropertiesArgs {
+  /** `recent` (default): latest activity first. `score`: highest local score first, unscored last. */
+  sort?: PropertySort;
   includeHidden?: boolean;
   favoritesOnly?: boolean;
   /** A region slug; matches that region and everything below it. */
@@ -325,6 +341,53 @@ export interface ComparablePrice {
   confidence: Confidence;
 }
 
+export type ScoreComponentKind = "price_per_m2" | "cross_listing" | "fit" | "freshness";
+
+export type UnavailableReason =
+  | "no_comparable_price"
+  | "area_unknown"
+  | "too_few_comparables"
+  | "not_verified"
+  | "single_source"
+  | "no_preferences"
+  | "value_unknown";
+
+export type ConfidenceReason =
+  | "no_price"
+  | "no_area"
+  | "low_component_coverage"
+  | "partial_component_coverage"
+  | "few_comparables"
+  | "broad_segment"
+  | "property_type_unknown"
+  | "conflicting_values"
+  | "price_confidence_medium"
+  | "stale_data"
+  | "fit_values_unknown";
+
+/** One part of the local score. A component that cannot be computed is unavailable, never zero. */
+export interface ScoreComponent {
+  kind: ScoreComponentKind;
+  /** The configured weight, before renormalising over the available components. */
+  weight: number;
+  /** 0-100, or null when unavailable. */
+  score: number | null;
+  unavailable_reason: UnavailableReason | null;
+  /** What the score rests on (values, comparables, segment). A stored document. */
+  evidence: unknown;
+}
+
+/** The stored explanation of a local score (a stored document, snake_case). */
+export interface ScoreDetails {
+  ranking_version: string;
+  comparable_price_centavos: number | null;
+  /** Always the four components, available or not. */
+  components: ScoreComponent[];
+  /** Share (0-1) of the total weight that was available. */
+  available_weight_share: number;
+  confidence_reasons: ConfidenceReason[];
+}
+
 export interface PropertyView {
   id: number;
   status: UserStatus;
@@ -349,6 +412,62 @@ export interface PropertyView {
   priceSpread: [number, number] | null;
   /** Which listing supports each canonical value (a stored document, snake_case). */
   canonicalProvenance: unknown;
+  /** "Pontuação local", 0-100 with one decimal; null when the property is not ranked or nothing could be scored. */
+  localScore: number | null;
+  /** How much to trust the data behind the score (separate from the score itself). */
+  dataConfidence: Confidence | null;
+  scoreDetails: ScoreDetails | null;
+  rankingVersion: string | null;
+  scoredAt: string | null;
+}
+
+/** What the user is looking for. A criterion that is left empty is not scored. */
+export interface SearchPreferences {
+  bedroomsMin: number | null;
+  bedroomsMax: number | null;
+  suitesMin: number | null;
+  parkingMin: number | null;
+}
+
+/** Weights and thresholds of the local score (the documented defaults until changed). */
+export interface RankingConfig {
+  weightPricePerM2: number;
+  weightCrossListing: number;
+  weightFit: number;
+  weightFreshness: number;
+  /** Fewest comparables a price-per-m² comparison may rest on. */
+  minComparables: number;
+  /** Comparables needed before the comparison counts as well supported. */
+  solidComparables: number;
+  /** A price spread of this percent between sources scores 100 (linear below it). */
+  crossListingCapPercent: number;
+  /** A listing first seen this many days ago (or more) scores 0 for freshness. */
+  freshnessMaxAgeDays: number;
+  /** A listing last scraped longer ago than this lowers the data confidence. */
+  staleScrapeDays: number;
+}
+
+export function getSearchPreferences(): Promise<SearchPreferences> {
+  return invoke<SearchPreferences>("get_search_preferences");
+}
+
+/** Refused when the preferences contradict themselves; refreshes the scores when saved. */
+export function saveSearchPreferences(preferences: SearchPreferences): Promise<RankingReport> {
+  return invoke<RankingReport>("save_search_preferences", { preferences });
+}
+
+export function getRankingConfig(): Promise<RankingConfig> {
+  return invoke<RankingConfig>("get_ranking_config");
+}
+
+/** Refused when the values make the ranking meaningless; refreshes every score when saved. */
+export function saveRankingConfig(config: RankingConfig): Promise<RankingReport> {
+  return invoke<RankingReport>("save_ranking_config", { config });
+}
+
+/** Recomputes every score now (collections and merge decisions already do it on their own). */
+export function recomputeRanking(): Promise<RankingReport> {
+  return invoke<RankingReport>("recompute_ranking");
 }
 
 export function listProperties(args: ListPropertiesArgs = {}): Promise<Page<PropertyView>> {

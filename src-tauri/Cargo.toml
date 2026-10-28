@@ -35,6 +35,8 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "time", "sync", "ma
 reqwest = { version = "0.13.5", default-features = false, features = ["native-tls", "gzip", "charset", "system-proxy"] }
 url = "2.5.8"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+sha2 = "0.11.1"
+keyring-core = "1.0.1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
@@ -53,3 +55,6 @@ pedantic = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+
+[target."cfg(windows)".dependencies]
+windows-native-keyring-store = "1.1.0"

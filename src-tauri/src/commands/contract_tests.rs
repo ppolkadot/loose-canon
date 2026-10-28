@@ -69,6 +69,9 @@ fn saved_results_match_the_typescript_contract() {
     let (listing, property) = add_typed(&db, "alpha", 1, FULL_AD, PropertyType::House);
     place(&db, property, "Goiânia", Some("Setor Bueno"));
     hash_image(&db, listing, "https://img.test/a.png", 7);
+    // Scored, so the score fields carry real values rather than nulls.
+    db.with_conn(|c| crate::ranking::recompute(c, chrono::Utc::now()))
+        .unwrap();
     let page = db
         .with_conn(|c| list_properties(c, &PropertyQuery::default()))
         .unwrap();
@@ -96,8 +99,32 @@ fn saved_results_match_the_typescript_contract() {
             "comparablePrices",
             "priceSpread",
             "canonicalProvenance",
+            "localScore",
+            "dataConfidence",
+            "scoreDetails",
+            "rankingVersion",
+            "scoredAt",
         ],
         "PropertyView",
+    );
+    assert!(item["localScore"].is_f64(), "the score is a plain number");
+    assert!(item["dataConfidence"].is_string());
+    // The stored explanation keeps the stored document's own snake_case keys, like the provenance.
+    assert_keys(
+        &item["scoreDetails"],
+        &[
+            "ranking_version",
+            "comparable_price_centavos",
+            "components",
+            "available_weight_share",
+            "confidence_reasons",
+        ],
+        "ScoreDetails",
+    );
+    assert_keys(
+        &item["scoreDetails"]["components"][0],
+        &["kind", "weight", "score", "unavailable_reason", "evidence"],
+        "Component",
     );
     assert_keys(
         &item["listings"][0],
@@ -431,6 +458,7 @@ fn finished_collections_and_sources_match_the_typescript_contract() {
         follow_up_errors: vec![],
         images: None,
         matching: None,
+        ranking: None,
     })
     .unwrap();
     assert_keys(
@@ -443,6 +471,7 @@ fn finished_collections_and_sources_match_the_typescript_contract() {
             "followUpErrors",
             "images",
             "matching",
+            "ranking",
         ],
         "CollectionFinished",
     );
@@ -457,5 +486,39 @@ fn finished_collections_and_sources_match_the_typescript_contract() {
         &source,
         &["adapterId", "platform", "latestOutcome"],
         "SourceInfo",
+    );
+}
+
+#[test]
+fn ranking_settings_and_reports_match_the_typescript_contract() {
+    use crate::ranking::{
+        config::{RankingConfig, SearchPreferences},
+        store::SaveReport,
+    };
+
+    assert_keys(
+        &serde_json::to_value(SearchPreferences::default()).unwrap(),
+        &["bedroomsMin", "bedroomsMax", "suitesMin", "parkingMin"],
+        "SearchPreferences",
+    );
+    assert_keys(
+        &serde_json::to_value(RankingConfig::default()).unwrap(),
+        &[
+            "weightPricePerM2",
+            "weightCrossListing",
+            "weightFit",
+            "weightFreshness",
+            "minComparables",
+            "solidComparables",
+            "crossListingCapPercent",
+            "freshnessMaxAgeDays",
+            "staleScrapeDays",
+        ],
+        "RankingConfig",
+    );
+    assert_keys(
+        &serde_json::to_value(SaveReport::default()).unwrap(),
+        &["scored", "unscored", "cleared"],
+        "RankingReport",
     );
 }

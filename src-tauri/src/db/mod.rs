@@ -27,6 +27,7 @@ pub mod price_history;
 pub mod properties;
 pub mod regions;
 pub mod runs;
+pub mod settings;
 
 use std::{
     path::{Path, PathBuf},
@@ -59,6 +60,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 2,
         name: "collection_and_audit",
         sql: include_str!("migrations/0002_collection_and_audit.sql"),
+    },
+    Migration {
+        version: 3,
+        name: "settings_ranking_ai",
+        sql: include_str!("migrations/0003_settings_ranking_ai.sql"),
     },
 ];
 
@@ -228,6 +234,8 @@ impl Database {
 
 #[cfg(test)]
 mod migration_0002_tests;
+#[cfg(test)]
+mod migration_0003_tests;
 #[cfg(test)]
 pub(crate) mod testkit;
 #[cfg(test)]

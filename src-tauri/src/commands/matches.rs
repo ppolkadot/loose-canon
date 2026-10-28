@@ -95,7 +95,7 @@ pub async fn list_match_events(
         .await
 }
 
-/// Merges the two properties. Repeating it changes nothing.
+/// Merges the two properties and refreshes the scores. Repeating it changes nothing.
 #[tauri::command]
 pub async fn accept_match(
     service: State<'_, Arc<AppService>>,
@@ -105,7 +105,7 @@ pub async fn accept_match(
     let note = clean_note(note)?;
     let at = chrono::Utc::now();
     service
-        .blocking(move |conn| store::accept_match(conn, match_id, note.as_deref(), at))
+        .blocking_then_rerank(move |conn| store::accept_match(conn, match_id, note.as_deref(), at))
         .await
 }
 
@@ -123,7 +123,7 @@ pub async fn reject_match(
         .await
 }
 
-/// Reverses a merge; each side keeps the status it had.
+/// Reverses a merge (each side keeps the status it had) and refreshes the scores.
 #[tauri::command]
 pub async fn undo_merge(
     service: State<'_, Arc<AppService>>,
@@ -133,7 +133,7 @@ pub async fn undo_merge(
     let note = clean_note(note)?;
     let at = chrono::Utc::now();
     service
-        .blocking(move |conn| store::undo_merge(conn, match_id, note.as_deref(), at))
+        .blocking_then_rerank(move |conn| store::undo_merge(conn, match_id, note.as_deref(), at))
         .await
 }
 

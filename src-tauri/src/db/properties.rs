@@ -7,7 +7,7 @@
 
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, named_params, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{listings::StoredPrice, parse_timestamp};
@@ -21,6 +21,7 @@ use crate::{
         money::Money,
         price::{MIN_COMPARABLE_CONFIDENCE, PriceClassification},
     },
+    ranking::{score::ScoreDetails, store::load_score},
 };
 
 /// Bound for walks up the merge chain. Triggers make cycles impossible; this is belt and braces.
@@ -346,8 +347,21 @@ pub fn set_user_status(
 // Read model
 // ================================================================================================
 
+/// The order of the saved-results list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PropertySort {
+    /// Most recent activity first.
+    #[default]
+    Recent,
+    /// Highest local score first; properties without a score come last (never as a zero), ties
+    /// by most recent activity.
+    Score,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PropertyQuery {
+    pub sort: PropertySort,
     pub include_hidden: bool,
     pub favorites_only: bool,
     /// A region slug; matches properties in that region or in any region below it.
@@ -439,6 +453,13 @@ pub struct PropertyView {
     pub comparable_prices: Vec<ComparablePrice>,
     pub price_spread: Option<(Money, Money)>,
     pub canonical_provenance: Option<serde_json::Value>,
+    /// 0-100 with one decimal; `None` when the property is not ranked or nothing could be scored.
+    pub local_score: Option<f64>,
+    pub data_confidence: Option<Confidence>,
+    /// The stored explanation of the score (components, evidence, confidence reasons).
+    pub score_details: Option<ScoreDetails>,
+    pub ranking_version: Option<String>,
+    pub scored_at: Option<DateTime<Utc>>,
 }
 
 pub(super) fn parse_enum<T: std::str::FromStr>(column: &'static str, text: &str) -> Result<T> {
@@ -644,6 +665,7 @@ pub fn get_property_view(conn: &Connection, root_id: i64) -> Result<Option<Prope
         value: format!("no status for root {root_id}"),
     })?;
 
+    let score = load_score(conn, root_id)?.unwrap_or_default();
     let (listings, comparable_prices) = load_listings(conn, root_id)?;
     let price_spread = comparable_prices
         .iter()
@@ -681,6 +703,11 @@ pub fn get_property_view(conn: &Connection, root_id: i64) -> Result<Option<Prope
             .as_deref()
             .map(serde_json::from_str)
             .transpose()?,
+        local_score: score.score,
+        data_confidence: score.confidence,
+        score_details: score.details,
+        ranking_version: score.ranking_version,
+        scored_at: score.scored_at,
     }))
 }
 
@@ -725,10 +752,14 @@ pub fn list_properties(conn: &Connection, query: &PropertyQuery) -> Result<Page<
         |r| r.get(0),
     )?;
 
+    let by_score = match query.sort {
+        PropertySort::Recent => "",
+        PropertySort::Score => "p.local_score IS NULL, p.local_score DESC, ",
+    };
     let mut statement = conn.prepare(&format!(
         "{region_cte}
          SELECT p.id {filter}
-         ORDER BY (SELECT MAX(l.last_seen_at) FROM property_groups g
+         ORDER BY {by_score}(SELECT MAX(l.last_seen_at) FROM property_groups g
                      JOIN listing_links l ON l.property_id = g.member_id
                     WHERE g.root_id = p.id) DESC, p.id DESC
          LIMIT :limit OFFSET :offset"

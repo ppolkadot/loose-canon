@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod commands;
 pub mod db;
 pub mod error;
@@ -5,6 +6,7 @@ pub mod images;
 pub mod matching;
 pub mod models;
 pub mod parser;
+pub mod ranking;
 pub mod service;
 pub mod sources;
 
@@ -57,6 +59,11 @@ pub fn run() {
             commands::matches::reject_match,
             commands::matches::undo_merge,
             commands::matches::run_matching_pass,
+            commands::ranking::get_search_preferences,
+            commands::ranking::save_search_preferences,
+            commands::ranking::get_ranking_config,
+            commands::ranking::save_ranking_config,
+            commands::ranking::recompute_ranking,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

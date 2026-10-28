@@ -63,6 +63,36 @@ pub fn add_typed(
     insert(db, &l)
 }
 
+/// Proposes the two listings as the same property and accepts it, as a user would: afterwards
+/// they are one merge group.
+pub fn merge(db: &Database, listing_a: i64, listing_b: i64) {
+    use crate::{
+        db::matches::{NewMatch, accept_match, store_candidate},
+        models::matching::{MatchCategory, MatchEvidence},
+    };
+    let evidence = MatchEvidence {
+        rule_version: "match_rules/1".into(),
+        signals: vec![],
+        conflicts: vec![],
+        unknown: vec![],
+        image_pairs: vec![],
+        notes: vec![],
+    };
+    let new = NewMatch {
+        listing_a_id: listing_a,
+        listing_b_id: listing_b,
+        category: MatchCategory::High,
+        min_image_distance: None,
+        evidence: &evidence,
+        inputs: serde_json::json!({}),
+    };
+    let id = db
+        .with_conn(|c| store_candidate(c, &new, at(1)))
+        .unwrap()
+        .match_id;
+    db.with_conn(|c| accept_match(c, id, None, at(2))).unwrap();
+}
+
 /// Sets where a property is, as the region resolver would have.
 pub fn place(db: &Database, property: i64, municipality: &str, neighborhood: Option<&str>) {
     db.with_conn(|c| {

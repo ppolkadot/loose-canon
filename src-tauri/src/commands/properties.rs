@@ -10,7 +10,7 @@ use tauri::State;
 
 use super::validate_slug;
 use crate::{
-    db::properties::{self as store, Page, PropertyQuery, PropertyView},
+    db::properties::{self as store, Page, PropertyQuery, PropertySort, PropertyView},
     error::Result,
     models::{listing::UserStatus, money::Money},
     service::AppService,
@@ -21,6 +21,8 @@ use crate::{
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct ListPropertiesArgs {
+    /// `recent` (default) or `score`.
+    pub sort: PropertySort,
     pub include_hidden: bool,
     pub favorites_only: bool,
     /// A region slug; matches that region and everything below it.
@@ -40,6 +42,7 @@ impl ListPropertiesArgs {
             validate_slug(slug)?;
         }
         Ok(PropertyQuery {
+            sort: self.sort,
             include_hidden: self.include_hidden,
             favorites_only: self.favorites_only,
             region_slug: self.region_slug,
@@ -103,6 +106,14 @@ mod tests {
             (query.effective_limit(), query.offset),
             (PropertyQuery::DEFAULT_LIMIT, 0)
         );
+    }
+
+    #[test]
+    fn the_order_defaults_to_recent_and_can_be_the_local_score() {
+        assert_eq!(args("{}").into_query().unwrap().sort, PropertySort::Recent);
+        let by_score = args(r#"{ "sort": "score" }"#).into_query().unwrap();
+        assert_eq!(by_score.sort, PropertySort::Score);
+        assert!(serde_json::from_str::<ListPropertiesArgs>(r#"{ "sort": "price" }"#).is_err());
     }
 
     #[test]

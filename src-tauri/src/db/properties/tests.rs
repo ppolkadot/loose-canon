@@ -775,3 +775,154 @@ fn the_group_status_decides_visibility() {
     );
     assert!(ids(&all).contains(&f.merged_root));
 }
+
+// ---- local score in the read model ---------------------------------------------------------
+
+mod scores {
+    use super::*;
+    use crate::ranking::{
+        RANKING_VERSION,
+        score::{ConfidenceReason, Ranked, ScoreDetails},
+        store::save_ranking,
+    };
+
+    fn ranked(property_id: i64, score: Option<f64>, confidence: Confidence) -> Ranked {
+        Ranked {
+            property_id,
+            score,
+            confidence,
+            details: ScoreDetails {
+                ranking_version: RANKING_VERSION.to_owned(),
+                comparable_price_centavos: Some(35_000_000),
+                components: vec![],
+                available_weight_share: 0.6,
+                confidence_reasons: vec![ConfidenceReason::PropertyTypeUnknown],
+            },
+        }
+    }
+
+    fn save(db: &Database, ranked: &[Ranked]) {
+        db.with_conn(|c| save_ranking(c, ranked, at(500))).unwrap();
+    }
+
+    fn sorted_by_score() -> PropertyQuery {
+        PropertyQuery {
+            sort: PropertySort::Score,
+            ..PropertyQuery::default()
+        }
+    }
+
+    /// Three listings seen at increasing times, so the recent order is `[c, b, a]`.
+    fn three(db: &Database) -> [i64; 3] {
+        let one = |n: i64| {
+            add(
+                db,
+                "fake",
+                &format!("https://fake.test/{n}"),
+                "Casa 3 quartos. Valor total R$ 350 mil",
+                n * 10,
+                None,
+            )
+            .property_id
+        };
+        [one(1), one(2), one(3)]
+    }
+
+    #[test]
+    fn a_property_view_carries_its_stored_score_confidence_and_explanation() {
+        let db = mem();
+        let [a, ..] = three(&db);
+        save(&db, &[ranked(a, Some(72.5), Confidence::Medium)]);
+        let view = list(&db, &PropertyQuery::default())
+            .items
+            .into_iter()
+            .find(|p| p.id == a)
+            .unwrap();
+        assert_eq!(view.local_score, Some(72.5));
+        assert_eq!(view.data_confidence, Some(Confidence::Medium));
+        assert_eq!(view.scored_at, Some(at(500)));
+        let details = view
+            .score_details
+            .expect("the explanation is part of the view");
+        assert_eq!(details.comparable_price_centavos, Some(35_000_000));
+        assert_eq!(
+            details.confidence_reasons,
+            vec![ConfidenceReason::PropertyTypeUnknown]
+        );
+    }
+
+    #[test]
+    fn an_unscored_property_has_no_score_fields_at_all() {
+        let db = mem();
+        let [a, ..] = three(&db);
+        let view = db.with_conn(|c| get_property_view(c, a)).unwrap().unwrap();
+        assert_eq!(
+            (
+                view.local_score,
+                view.data_confidence,
+                view.score_details,
+                view.scored_at
+            ),
+            (None, None, None, None)
+        );
+    }
+
+    #[test]
+    fn the_default_order_stays_most_recent_first_whatever_the_scores() {
+        let db = mem();
+        let [a, b, c] = three(&db);
+        save(&db, &[ranked(a, Some(90.0), Confidence::High)]);
+        assert_eq!(ids(&list(&db, &PropertyQuery::default())), vec![c, b, a]);
+    }
+
+    #[test]
+    fn sorting_by_score_puts_the_highest_first_and_unscored_properties_last() {
+        let db = mem();
+        let [a, b, c] = three(&db);
+        save(
+            &db,
+            &[
+                ranked(a, Some(40.0), Confidence::Low),
+                ranked(b, Some(85.5), Confidence::Low),
+            ],
+        );
+        // `c` has no score: it comes last, not first and not as a zero.
+        assert_eq!(ids(&list(&db, &sorted_by_score())), vec![b, a, c]);
+    }
+
+    #[test]
+    fn equal_scores_fall_back_to_the_most_recent_activity() {
+        let db = mem();
+        let [a, b, c] = three(&db);
+        save(
+            &db,
+            &[
+                ranked(a, Some(50.0), Confidence::Low),
+                ranked(b, Some(50.0), Confidence::Low),
+                ranked(c, Some(50.0), Confidence::Low),
+            ],
+        );
+        assert_eq!(ids(&list(&db, &sorted_by_score())), vec![c, b, a]);
+    }
+
+    #[test]
+    fn paging_follows_the_score_order() {
+        let db = mem();
+        let [a, b, c] = three(&db);
+        save(
+            &db,
+            &[
+                ranked(a, Some(10.0), Confidence::Low),
+                ranked(b, Some(30.0), Confidence::Low),
+                ranked(c, Some(20.0), Confidence::Low),
+            ],
+        );
+        let second = PropertyQuery {
+            limit: 1,
+            offset: 1,
+            ..sorted_by_score()
+        };
+        let page = list(&db, &second);
+        assert_eq!((ids(&page), page.total), (vec![c], 3));
+    }
+}

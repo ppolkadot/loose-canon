@@ -21,8 +21,11 @@ use tokio::{
 pub struct Req {
     /// 1-based sequence number of this request across the whole server.
     pub hit: usize,
+    pub method: String,
     pub path: String,
     pub headers: Vec<(String, String)>,
+    /// The request body, as far as `Content-Length` announced it (capped).
+    pub body: Vec<u8>,
 }
 
 impl Req {
@@ -31,6 +34,10 @@ impl Req {
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case(name))
             .map(|(_, v)| v.as_str())
+    }
+
+    pub fn body_text(&self) -> String {
+        String::from_utf8_lossy(&self.body).into_owned()
     }
 }
 
@@ -84,6 +91,7 @@ pub struct Counters {
     max_active: AtomicUsize,
     starts: Mutex<Vec<Instant>>,
     paths: Mutex<Vec<String>>,
+    requests: Mutex<Vec<Req>>,
 }
 
 pub struct TestServer {
@@ -147,6 +155,11 @@ impl TestServer {
     pub fn paths(&self) -> Vec<String> {
         self.counters.paths.lock().unwrap().clone()
     }
+
+    /// Every request received, in order, with its method, headers and body.
+    pub fn requests(&self) -> Vec<Req> {
+        self.counters.requests.lock().unwrap().clone()
+    }
 }
 
 async fn serve(mut stream: TcpStream, handler: Handler, counters: Arc<Counters>) {
@@ -161,18 +174,44 @@ async fn serve(mut stream: TcpStream, handler: Handler, counters: Arc<Counters>)
             return;
         }
     }
-    let head = String::from_utf8_lossy(&buf).into_owned();
+    let header_end = buf
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map_or(buf.len(), |at| at + 4);
+    let head = String::from_utf8_lossy(&buf[..header_end]).into_owned();
     let mut lines = head.split("\r\n");
-    let path = lines
+    let request_line = lines.next().unwrap_or_default();
+    let method = request_line
+        .split_whitespace()
         .next()
-        .and_then(|l| l.split_whitespace().nth(1))
+        .unwrap_or("GET")
+        .to_owned();
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
         .unwrap_or("/")
         .to_owned();
     let headers = lines
         .take_while(|l| !l.is_empty())
         .filter_map(|l| l.split_once(':'))
         .map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned()))
-        .collect();
+        .collect::<Vec<(String, String)>>();
+
+    // The body: whatever followed the headers, plus the rest of `Content-Length` (capped).
+    let announced = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, v)| v.parse::<usize>().ok())
+        .unwrap_or(0)
+        .min(2 * 1024 * 1024);
+    let mut body = buf[header_end..].to_vec();
+    while body.len() < announced {
+        match stream.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => body.extend_from_slice(&chunk[..n]),
+        }
+    }
+    body.truncate(announced);
 
     let hit = counters.hits.fetch_add(1, Ordering::SeqCst) + 1;
     let now_active = counters.active.fetch_add(1, Ordering::SeqCst) + 1;
@@ -180,7 +219,15 @@ async fn serve(mut stream: TcpStream, handler: Handler, counters: Arc<Counters>)
     counters.starts.lock().unwrap().push(Instant::now());
     counters.paths.lock().unwrap().push(path.clone());
 
-    let reply = handler(&Req { hit, path, headers });
+    let request = Req {
+        hit,
+        method,
+        path,
+        headers,
+        body,
+    };
+    counters.requests.lock().unwrap().push(request.clone());
+    let reply = handler(&request);
     tokio::time::sleep(reply.delay).await;
 
     let mut out = format!(

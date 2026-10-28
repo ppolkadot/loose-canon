@@ -326,3 +326,273 @@ async fn the_service_is_already_free_when_the_finished_callback_runs() {
     }
     assert!(!service.collection_running());
 }
+
+// ---- local ranking -------------------------------------------------------------------------
+
+mod ranking {
+    use super::*;
+    use crate::{
+        db::{
+            matches::{NewMatch, accept_match, get_match, store_candidate, undo_merge},
+            properties::{PropertyQuery, list_properties},
+            settings::set_setting,
+        },
+        matching::testkit::{FULL_AD, add},
+        models::{
+            confidence::Confidence,
+            matching::{DecisionStatus, MatchCategory, MatchEvidence},
+        },
+        ranking::{
+            config::{RANKING_CONFIG_KEY, RankingConfig},
+            score::{ComponentKind, UnavailableReason},
+            store::load_score,
+        },
+    };
+
+    fn propose(service: &AppService, a: i64, b: i64) -> i64 {
+        let evidence = MatchEvidence {
+            rule_version: "match_rules/1".into(),
+            signals: vec![],
+            conflicts: vec![],
+            unknown: vec![],
+            image_pairs: vec![],
+            notes: vec![],
+        };
+        let new = NewMatch {
+            listing_a_id: a,
+            listing_b_id: b,
+            category: MatchCategory::High,
+            min_image_distance: None,
+            evidence: &evidence,
+            inputs: json!({}),
+        };
+        service
+            .db()
+            .with_conn(|c| store_candidate(c, &new, at(1)))
+            .unwrap()
+            .match_id
+    }
+
+    fn cross_listing_reason(service: &AppService, property: i64) -> Option<UnavailableReason> {
+        let stored = service
+            .db()
+            .with_conn(|c| load_score(c, property))
+            .unwrap()
+            .unwrap();
+        stored
+            .details
+            .expect("the property is scored")
+            .components
+            .into_iter()
+            .find(|c| c.kind == ComponentKind::CrossListing)
+            .unwrap()
+            .unavailable_reason
+    }
+
+    #[tokio::test]
+    async fn a_finished_collection_leaves_the_library_scored() {
+        let (service, _dir) = service_with(vec![adapter("fake", Behavior::OneListing)]);
+        let (sink, receiver) = finished_channel();
+        service
+            .start_collection(SearchRequest::default(), None, Some(sink))
+            .unwrap();
+        let done = finished(receiver).await;
+
+        assert_eq!(done.follow_up_errors, Vec::<String>::new());
+        let ranking = done.ranking.expect("ranking followed the matching pass");
+        assert_eq!(ranking.scored + ranking.unscored, 1);
+        let page = service
+            .db()
+            .with_conn(|c| list_properties(c, &PropertyQuery::default()))
+            .unwrap();
+        assert!(page.items[0].score_details.is_some());
+        assert!(page.items[0].data_confidence.is_some());
+    }
+
+    #[test]
+    fn recomputing_on_demand_scores_what_is_stored() {
+        let (service, _dir) = service_with(vec![]);
+        let (_, property) = add(service.db(), "alpha", 1, "Casa", FULL_AD);
+        let report = service.recompute_ranking().unwrap();
+        assert_eq!(report.scored + report.unscored, 1);
+        let stored = service
+            .db()
+            .with_conn(|c| load_score(c, property))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.scored_at,
+            Some(at(100)),
+            "the service clock decides the time"
+        );
+        assert!(stored.confidence.is_some_and(|c| c <= Confidence::Medium));
+    }
+
+    #[tokio::test]
+    async fn merging_and_undoing_refresh_the_scores_in_the_same_call() {
+        let (service, _dir) = service_with(vec![]);
+        let (la, pa) = add(service.db(), "alpha", 1, "Casa", FULL_AD);
+        let (lb, _) = add(service.db(), "beta", 1, "Casa", FULL_AD);
+        let id = propose(&service, la, lb);
+        service.recompute_ranking().unwrap();
+        assert_eq!(
+            cross_listing_reason(&service, pa),
+            Some(UnavailableReason::NotVerified),
+            "a proposal is not a verification"
+        );
+
+        service
+            .blocking_then_rerank(move |c| accept_match(c, id, None, at(5)))
+            .await
+            .unwrap();
+        assert_eq!(
+            cross_listing_reason(&service, pa),
+            None,
+            "the accepted merge makes the price difference between sources a scored component"
+        );
+
+        service
+            .blocking_then_rerank(move |c| undo_merge(c, id, None, at(9)))
+            .await
+            .unwrap();
+        assert_eq!(
+            cross_listing_reason(&service, pa),
+            Some(UnavailableReason::NotVerified)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_refresh_never_hides_that_the_decision_was_saved() {
+        let (service, _dir) = service_with(vec![]);
+        let (la, _) = add(service.db(), "alpha", 1, "Casa", FULL_AD);
+        let (lb, _) = add(service.db(), "beta", 1, "Casa", FULL_AD);
+        let id = propose(&service, la, lb);
+        let broken = RankingConfig {
+            weight_price_per_m2: 0.0,
+            weight_cross_listing: 0.0,
+            weight_fit: 0.0,
+            weight_freshness: 0.0,
+            ..RankingConfig::default()
+        };
+        service
+            .db()
+            .with_conn(|c| set_setting(c, RANKING_CONFIG_KEY, &broken, at(2)))
+            .unwrap();
+
+        let error = service
+            .blocking_then_rerank(move |c| accept_match(c, id, None, at(5)))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), "ranking_refresh_failed", "{error}");
+        let decided = service
+            .db()
+            .with_conn(|c| get_match(c, id))
+            .unwrap()
+            .expect("the match exists");
+        assert_eq!(
+            decided.decision_status,
+            DecisionStatus::Accepted,
+            "the merge decision stands"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failure_of_the_change_itself_is_reported_as_that_failure() {
+        let (service, _dir) = service_with(vec![]);
+        let error = service
+            .blocking_then_rerank(|c| accept_match(c, 4242, None, at(5)))
+            .await
+            .unwrap_err();
+        assert_ne!(error.kind(), "ranking_refresh_failed", "{error}");
+    }
+
+    fn fit_score(service: &AppService, property: i64) -> Option<f64> {
+        service
+            .db()
+            .with_conn(|c| load_score(c, property))
+            .unwrap()
+            .unwrap()
+            .details
+            .expect("scored")
+            .components
+            .into_iter()
+            .find(|c| c.kind == ComponentKind::Fit)
+            .unwrap()
+            .score
+    }
+
+    #[test]
+    fn with_nothing_saved_the_preferences_are_empty_and_the_weights_are_the_defaults() {
+        let (service, _dir) = service_with(vec![]);
+        assert!(service.search_preferences().unwrap().is_empty());
+        assert_eq!(service.ranking_config().unwrap(), RankingConfig::default());
+    }
+
+    #[tokio::test]
+    async fn saved_preferences_are_kept_and_rescore_the_library_at_once() {
+        let (service, _dir) = service_with(vec![]);
+        let (_, property) = add(service.db(), "alpha", 1, "Casa", FULL_AD);
+        service.recompute_ranking().unwrap();
+        assert_eq!(fit_score(&service, property), None);
+
+        let wants = SearchPreferences {
+            bedrooms_min: Some(3),
+            suites_min: Some(1),
+            ..SearchPreferences::default()
+        };
+        let report = service
+            .save_search_preferences(wants.clone())
+            .await
+            .unwrap();
+        assert_eq!(report.scored + report.unscored, 1);
+        assert_eq!(service.search_preferences().unwrap(), wants);
+        assert_eq!(
+            fit_score(&service, property),
+            Some(100.0),
+            "three bedrooms and a suite meet the stated minimums"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_preferences_are_refused_and_nothing_is_saved() {
+        let (service, _dir) = service_with(vec![]);
+        let backwards = SearchPreferences {
+            bedrooms_min: Some(5),
+            bedrooms_max: Some(2),
+            ..SearchPreferences::default()
+        };
+        let error = service
+            .save_search_preferences(backwards)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), "invalid_config", "{error}");
+        assert!(service.search_preferences().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_saved_configuration_changes_the_weights_and_an_invalid_one_is_refused() {
+        let (service, _dir) = service_with(vec![]);
+        add(service.db(), "alpha", 1, "Casa", FULL_AD);
+        let mine = RankingConfig {
+            weight_freshness: 0.9,
+            ..RankingConfig::default()
+        };
+        service.save_ranking_config(mine.clone()).await.unwrap();
+        assert_eq!(service.ranking_config().unwrap(), mine);
+
+        let nothing = RankingConfig {
+            weight_price_per_m2: 0.0,
+            weight_cross_listing: 0.0,
+            weight_fit: 0.0,
+            weight_freshness: 0.0,
+            ..RankingConfig::default()
+        };
+        let error = service.save_ranking_config(nothing).await.unwrap_err();
+        assert_eq!(error.kind(), "invalid_config", "{error}");
+        assert_eq!(
+            service.ranking_config().unwrap(),
+            mine,
+            "the previous configuration is kept"
+        );
+    }
+}
